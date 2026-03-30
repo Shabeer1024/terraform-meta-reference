@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Terraform Meta-Arguments | Azure Networking Reference</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1117; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #161b22; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+
+const META_ARGS = [
+  {
+    id: "count",
+    label: "count",
+    icon: "⚡",
+    color: "#00d4ff",
+    tagline: "Create N copies of a resource",
+    description: "Use when you need multiple identical resources. Each is indexed 0, 1, 2...",
+    code: `# Create 3 subnets in Azure
+resource "azurerm_subnet" "app_subnets" {
+  count = 3
+
+  name                 = "subnet-app-\${count.index}"
+  resource_group_name  = "rg-network"
+  virtual_network_name = "vnet-main"
+  address_prefixes     = ["10.0.\${count.index}.0/24"]
+}`,
+    outputs: [
+      { key: "count.index", value: "0, 1, 2  (current loop number)", example: 'name = "subnet-app-0"' },
+      { key: "Resource ref [0]", value: 'azurerm_subnet.app_subnets[0].id', example: "/subscriptions/.../subnets/subnet-app-0" },
+      { key: "Resource ref [1]", value: 'azurerm_subnet.app_subnets[1].id', example: "/subscriptions/.../subnets/subnet-app-1" },
+      { key: "All IDs (list)", value: 'azurerm_subnet.app_subnets[*].id', example: '["id-0", "id-1", "id-2"]' },
+    ],
+    whenToUse: "Use count when resources are identical except for an index number. NOT ideal when you need unique names from a list."
+  },
+  {
+    id: "for_each",
+    label: "for_each",
+    icon: "🔁",
+    color: "#a78bfa",
+    tagline: "Loop over a map or set with named keys",
+    description: "Better than count when each resource has a unique name or config. Access via each.key and each.value.",
+    code: `# Create NSGs for different environments
+resource "azurerm_network_security_group" "nsgs" {
+  for_each = {
+    dev  = "10.0.1.0/24"
+    uat  = "10.0.2.0/24"
+    prod = "10.0.3.0/24"
+  }
+
+  name                = "nsg-\${each.key}"
+  location            = "eastus"
+  resource_group_name = "rg-network"
+
+  security_rule {
+    name                       = "allow-subnet-\${each.key}"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = each.value
+    destination_port_range     = "443"
+  }
+}`,
+    outputs: [
+      { key: "each.key", value: '"dev" / "uat" / "prod"', example: 'name = "nsg-prod"' },
+      { key: "each.value", value: '"10.0.1.0/24" etc.', example: 'source_address_prefix = "10.0.3.0/24"' },
+      { key: "Resource ref", value: 'azurerm_network_security_group.nsgs["prod"].id', example: "/subscriptions/.../nsg-prod" },
+      { key: "All IDs (map)", value: '{ for k, v in azurerm_network_security_group.nsgs : k => v.id }', example: '{ dev = "id-dev", prod = "id-prod" }' },
+    ],
+    whenToUse: "Use for_each when each resource has a unique meaningful name (not just a number). Great for environments, regions, teams."
+  },
+  {
+    id: "lifecycle",
+    label: "lifecycle",
+    icon: "🔄",
+    color: "#34d399",
+    tagline: "Control create / update / destroy behaviour",
+    description: "Tells Terraform HOW to handle changes — prevent accidental deletes, ignore drift, or create before destroying.",
+    code: `# Production VNet - never delete accidentally
+resource "azurerm_virtual_network" "prod_vnet" {
+  name                = "vnet-prod"
+  location            = "eastus"
+  resource_group_name = "rg-network"
+  address_space       = ["10.0.0.0/8"]
+
+  lifecycle {
+    # Create new VNet before destroying old one
+    create_before_destroy = true
+
+    # Never let Terraform delete this VNet
+    prevent_destroy = true
+
+    # Ignore if someone changes tags manually in portal
+    ignore_changes = [tags]
+  }
+}`,
+    outputs: [
+      { key: "create_before_destroy", value: "true / false", example: "New resource created → traffic moved → old destroyed" },
+      { key: "prevent_destroy", value: "true", example: 'Error: Instance cannot be destroyed (prevents tf destroy)' },
+      { key: "ignore_changes", value: "[tags, location, ...]", example: "Terraform ignores manual tag changes in Azure Portal" },
+      { key: "replace_triggered_by", value: "[other_resource.id]", example: "Force replace this resource when another changes" },
+    ],
+    whenToUse: "Use lifecycle for production resources. prevent_destroy for critical infra. ignore_changes when external systems manage certain fields."
+  },
+  {
+    id: "depends_on",
+    label: "depends_on",
+    icon: "🔗",
+    color: "#fb923c",
+    tagline: "Force explicit ordering between resources",
+    description: "When Terraform can't auto-detect a dependency, you tell it manually. Resource A won't start until Resource B is complete.",
+    code: `# Subnet must exist before NSG Association
+resource "azurerm_subnet" "app" {
+  name                 = "subnet-app"
+  resource_group_name  = "rg-network"
+  virtual_network_name = "vnet-main"
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_security_group" "app_nsg" {
+  name                = "nsg-app"
+  location            = "eastus"
+  resource_group_name = "rg-network"
+}
+
+resource "azurerm_subnet_network_security_group_association" "assoc" {
+  subnet_id                 = azurerm_subnet.app.id
+  network_security_group_id = azurerm_network_security_group.app_nsg.id
+
+  depends_on = [
+    azurerm_subnet.app,
+    azurerm_network_security_group.app_nsg
+  ]
+}`,
+    outputs: [
+      { key: "depends_on value", value: "List of resource references", example: "[azurerm_subnet.app, azurerm_network_security_group.app_nsg]" },
+      { key: "Effect", value: "Terraform waits for all listed resources", example: "Association created ONLY after subnet + NSG ready" },
+      { key: "Plan order", value: "Visible in terraform plan", example: "azurerm_subnet.app → nsg → association" },
+    ],
+    whenToUse: "Use when there's a hidden dependency — like a script that depends on a resource being ready, even if Terraform can't detect it."
+  },
+  {
+    id: "meta_output",
+    label: "Meta Values",
+    icon: "📦",
+    color: "#f472b6",
+    tagline: "Values you can pull from any resource",
+    description: "After Terraform creates a resource, you can read back real Azure values — IDs, names, IPs — and use them elsewhere.",
+    code: `# Create a VNet and pull back metadata values
+resource "azurerm_virtual_network" "main" {
+  name                = "vnet-main"
+  location            = "eastus"
+  resource_group_name = "rg-network"
+  address_space       = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "app" {
+  name                 = "subnet-app"
+  resource_group_name  = "rg-network"
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+output "vnet_id" {
+  value = azurerm_virtual_network.main.id
+}
+
+output "subnet_id" {
+  value = azurerm_subnet.app.id
+}
+
+output "vnet_name" {
+  value = azurerm_virtual_network.main.name
+}`,
+    outputs: [
+      { key: "resource.name.id", value: "Full Azure Resource ID", example: "/subscriptions/xxx/resourceGroups/rg-network/providers/.../vnet-main" },
+      { key: "resource.name.name", value: "Resource name string", example: '"vnet-main"' },
+      { key: "resource.name.location", value: "Azure region", example: '"eastus"' },
+      { key: "resource.name.address_space", value: "List of CIDR blocks", example: '["10.0.0.0/16"]' },
+      { key: "terraform.workspace", value: "Current workspace name", example: '"prod" or "dev"' },
+    ],
+    whenToUse: "Always use resource references (not hardcoded IDs). This way Terraform tracks the dependency and your values stay in sync."
+  }
+];
+
+function App() {
+  const [active, setActive] = React.useState("count");
+  const [copiedIdx, setCopiedIdx] = React.useState(null);
+  const current = META_ARGS.find(m => m.id === active);
+
+  const handleCopy = (text, idx) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 1500);
+  };
+
+  return (
+    <div style={{
+      fontFamily: "'Courier New', monospace",
+      background: "#0d1117",
+      minHeight: "100vh",
+      color: "#e6edf3",
+      display: "flex",
+      flexDirection: "column",
+    }}>
+      <div style={{
+        padding: "20px 28px 14px",
+        borderBottom: "1px solid #21262d",
+        display: "flex", alignItems: "center", gap: 12,
+        background: "#161b22"
+      }}>
+        <div style={{ fontSize: 22 }}>🏗️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#58a6ff", letterSpacing: 1 }}>TERRAFORM META-ARGUMENTS</div>
+          <div style={{ fontSize: 11, color: "#8b949e", marginTop: 2 }}>Azure Networking · Interactive Reference</div>
+        </div>
+        <div style={{
+          marginLeft: "auto",
+          textAlign: "right"
+        }}>
+          <div style={{ fontSize: 10, color: "#484f58", letterSpacing: 1 }}></div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#58a6ff", letterSpacing: 2 }}></div>
+          <div style={{ fontSize: 9, color: "#484f58" }}>Azure Cloud Ops</div>
+        </div>
+      </div>
+
+      <div style={{
+        display: "flex", overflowX: "auto", gap: 4,
+        padding: "10px 16px", background: "#161b22",
+        borderBottom: "1px solid #21262d"
+      }}>
+        {META_ARGS.map(m => (
+          <button key={m.id} onClick={() => setActive(m.id)} style={{
+            padding: "6px 14px", borderRadius: 6,
+            border: active === m.id ? `1.5px solid ${m.color}` : "1.5px solid #30363d",
+            background: active === m.id ? `${m.color}18` : "transparent",
+            color: active === m.id ? m.color : "#8b949e",
+            cursor: "pointer", fontSize: 12,
+            fontFamily: "inherit", fontWeight: 600,
+            whiteSpace: "nowrap", transition: "all 0.15s"
+          }}>
+            {m.icon} {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flex: 1, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 340px", padding: "20px 20px 20px 24px", borderRight: "1px solid #21262d" }}>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 18, color: current.color, fontWeight: 700 }}>{current.icon} {current.label}</div>
+            <div style={{ fontSize: 12, color: "#58a6ff", marginTop: 4 }}>{current.tagline}</div>
+            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 6, lineHeight: 1.6 }}>{current.description}</div>
+          </div>
+          <div style={{ position: "relative" }}>
+            <div style={{
+              background: "#010409", border: "1px solid #21262d",
+              borderRadius: 8, padding: "16px", fontSize: 11.5,
+              lineHeight: 1.7, overflowX: "auto", color: "#c9d1d9"
+            }}>
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {current.code.split('\n').map((line, i) => {
+                  const isComment = line.trim().startsWith('#');
+                  const isKeyword = /^\s*(resource|output|lifecycle|for_each|count|depends_on|provider)\b/.test(line);
+                  return (
+                    <div key={i} style={{ color: isComment ? "#3fb950" : isKeyword ? "#ff7b72" : "#c9d1d9" }}>{line}</div>
+                  );
+                })}
+              </pre>
+            </div>
+            <button onClick={() => handleCopy(current.code, 'code')} style={{
+              position: "absolute", top: 8, right: 8,
+              background: "#21262d", border: "1px solid #30363d",
+              color: copiedIdx === 'code' ? "#3fb950" : "#8b949e",
+              borderRadius: 5, padding: "3px 10px", fontSize: 10,
+              cursor: "pointer", fontFamily: "inherit"
+            }}>
+              {copiedIdx === 'code' ? "✓ Copied" : "Copy"}
+            </button>
+          </div>
+          <div style={{
+            marginTop: 14, background: `${current.color}10`,
+            border: `1px solid ${current.color}30`, borderRadius: 7,
+            padding: "10px 14px", fontSize: 11, color: "#c9d1d9", lineHeight: 1.6
+          }}>
+            <span style={{ color: current.color, fontWeight: 700 }}>💡 When to use: </span>
+            {current.whenToUse}
+          </div>
+        </div>
+
+        <div style={{ flex: "1 1 280px", padding: "20px 24px" }}>
+          <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 14, fontWeight: 600, letterSpacing: 1 }}>
+            📤 VALUES YOU CAN USE / OUTPUT
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {current.outputs.map((out, i) => (
+              <div key={i} style={{
+                background: "#161b22", border: "1px solid #21262d",
+                borderRadius: 8, padding: "12px 14px"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 12, color: current.color, fontWeight: 700, marginBottom: 4 }}>{out.key}</div>
+                  <button onClick={() => handleCopy(out.example, i)} style={{
+                    background: "transparent", border: "none",
+                    color: copiedIdx === i ? "#3fb950" : "#484f58",
+                    cursor: "pointer", fontSize: 10, fontFamily: "inherit", padding: "2px 6px"
+                  }}>
+                    {copiedIdx === i ? "✓" : "copy"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 6 }}>→ {out.value}</div>
+                <div style={{
+                  background: "#010409", borderRadius: 5, padding: "6px 10px",
+                  fontSize: 10.5, color: "#f0883e", wordBreak: "break-all"
+                }}>
+                  {out.example}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{
+            marginTop: 20, background: "#161b22",
+            border: "1px solid #21262d", borderRadius: 8, padding: "12px 14px"
+          }}>
+            <div style={{ fontSize: 11, color: "#8b949e", fontWeight: 700, marginBottom: 8 }}>⚡ QUICK COMPARE</div>
+            {[
+              { label: "count", use: "N identical resources", color: "#00d4ff" },
+              { label: "for_each", use: "Named resources from map/set", color: "#a78bfa" },
+              { label: "lifecycle", use: "Control create/update/destroy", color: "#34d399" },
+              { label: "depends_on", use: "Explicit ordering", color: "#fb923c" },
+              { label: "Meta outputs", use: "Pull real Azure values", color: "#f472b6" },
+            ].map((r, i) => (
+              <div key={i} style={{
+                display: "flex", justifyContent: "space-between",
+                padding: "4px 0",
+                borderBottom: i < 4 ? "1px solid #21262d" : "none",
+                alignItems: "center"
+              }}>
+                <span style={{ color: r.color, fontSize: 11, fontWeight: 600 }}>{r.label}</span>
+                <span style={{ color: "#8b949e", fontSize: 10 }}>{r.use}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Root() {
+  return (
+    <div>
+      <App />
+      <div style={{
+        background: "#161b22",
+        borderTop: "1px solid #21262d",
+        padding: "12px 28px",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }}>
+        <div style={{ fontSize: 10, color: "#484f58" }}>
+          Built for learning · Terraform Meta-Arguments · Azure Networking
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: "50%",
+            background: "linear-gradient(135deg, #58a6ff, #a78bfa)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 11, fontWeight: 700, color: "#fff"
+          }}>S</div>
+          <div>
+            <div style={{ fontSize: 11, color: "#58a6ff", fontWeight: 700, letterSpacing: 1 }}>Shabeer</div>
+            <div style={{ fontSize: 9, color: "#484f58" }}>EUC Architect · Azure Cloud Ops</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+  </script>
+</body>
+</html>
